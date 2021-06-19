@@ -178,6 +178,54 @@ export interface ScanOptions {
    * @instance
    */
   callbackType?: $Values<typeof ScanCallbackType>;
+
+  /**
+   * Optional Android scan filters. [Android Only]
+   * When assigned, filteredUUIDs argument in {@link BleModule.startDeviceScan} is ignored!
+   * @memberOf ScanOptions
+   * @instance
+   */
+  androidScanFilters?: Array<ScanFilter>;
+}
+
+/**
+ * Scan filter description
+ */
+export interface ScanFilter {
+  /**
+   * Optional device MAC address to filter on
+   */
+  deviceAddress?: string;
+
+  /**
+   * Optional device name to filter on
+   */
+  deviceName?: string;
+
+  /**
+   * Optional manufacturerData filter description
+   */
+  manufacturerData?: ScanFilterManufacturerData;
+}
+
+/**
+ * Configuration of Scan Filter based on manufacturerData
+ */
+export interface ScanFilterManufacturerData {
+  /**
+   * Manufacturer ID. Can not be greater than 65535 (2 bytes)
+   */
+  manufacturerId: number;
+
+  /**
+   * Base64-encoded manufacturerData
+   */
+  dataBase64: Base64;
+
+  /**
+   * Optional Base64-encoded mask which tells which bytes of manufacturerData
+   */
+  dataMaskBase64?: Base64;
 }
 
 /**

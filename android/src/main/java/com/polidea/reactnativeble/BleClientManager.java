@@ -1,5 +1,9 @@
 package com.polidea.reactnativeble;
 
+import android.os.Build;
+
+import androidx.annotation.NonNull;
+
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -31,15 +35,17 @@ import com.polidea.reactnativeble.converter.DescriptorToJsObjectConverter;
 import com.polidea.reactnativeble.converter.DeviceToJsObjectConverter;
 import com.polidea.reactnativeble.converter.ScanResultToJsObjectConverter;
 import com.polidea.reactnativeble.converter.ServiceToJsObjectConverter;
+import com.polidea.reactnativeble.utils.Base64Converter;
 import com.polidea.reactnativeble.utils.ReadableArrayConverter;
 import com.polidea.reactnativeble.utils.SafePromise;
+import com.polidea.rxandroidble.scan.ScanFilter;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import javax.annotation.Nullable;
 
 
 public class BleClientManager extends ReactContextBaseJavaModule {
@@ -166,6 +172,8 @@ public class BleClientManager extends ReactContextBaseJavaModule {
         int scanMode = DEFAULT_SCAN_MODE_LOW_POWER;
         int callbackType = DEFAULT_CALLBACK_TYPE_ALL_MATCHES;
 
+        final List<ScanFilter> filters = new ArrayList<>();
+
         if (options != null) {
             if (options.hasKey("scanMode") && options.getType("scanMode") == ReadableType.Number) {
                 scanMode = options.getInt("scanMode");
@@ -173,22 +181,102 @@ public class BleClientManager extends ReactContextBaseJavaModule {
             if (options.hasKey("callbackType") && options.getType("callbackType") == ReadableType.Number) {
                 callbackType = options.getInt("callbackType");
             }
+            if (options.hasKey("androidScanFilters") && options.getType("androidScanFilters") == ReadableType.Array) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    final ReadableArray scanFilters = options.getArray("androidScanFilters");
+                    for (int i = 0; i < scanFilters.size(); i++) {
+                        if (scanFilters.getType(i) == ReadableType.Map) {
+                            final ReadableMap scanFilter = scanFilters.getMap(i);
+                            final ScanFilter.Builder builder = new ScanFilter.Builder();
+                            boolean filterHasAtLeastOneCondition = false;
+                            if (scanFilter.hasKey("deviceAddress") && scanFilter.getType("deviceAddress") == ReadableType.String) {
+                                builder.setDeviceAddress(scanFilter.getString("deviceAddress"));
+                                filterHasAtLeastOneCondition = true;
+                            }
+                            if (scanFilter.hasKey("deviceName") && scanFilter.getType("deviceName") == ReadableType.String) {
+                                builder.setDeviceName(scanFilter.getString("deviceName"));
+                                filterHasAtLeastOneCondition = true;
+                            }
+                            if (scanFilter.hasKey("manufacturerData") && scanFilter.getType("manufacturerData") == ReadableType.Map) {
+                                final ReadableMap manufacturerData = scanFilter.getMap("manufacturerData");
+                                Integer manufacturerId = null;
+                                if (manufacturerData.hasKey("manufacturerId") && manufacturerData.getType("manufacturerId") == ReadableType.Number) {
+                                    manufacturerId = manufacturerData.getInt("manufacturerId");
+                                }
+                                if (manufacturerId == null) {
+                                    throw new IllegalArgumentException("manufacturerId is required for scan filter!");
+                                }
+                                if (manufacturerId > 65535) {
+                                    throw new IllegalArgumentException("manufacturerId cannot be higher than 65535. It must fit into 2 bytes!");
+                                }
+                                byte[] data = null;
+                                byte[] dataMask = null;
+                                if (manufacturerData.hasKey("dataBase64") && manufacturerData.getType("dataBase64") == ReadableType.String) {
+                                    try {
+                                        data = Base64Converter.decode(manufacturerData.getString("dataBase64"));
+                                    } catch (IllegalArgumentException exception) {
+                                        throw new IllegalArgumentException("Malformed scanFilter data base64!", exception);
+                                    }
+                                }
+                                if (manufacturerData.hasKey("dataMaskBase64") && manufacturerData.getType("dataMaskBase64") == ReadableType.String) {
+                                    try {
+                                        dataMask = Base64Converter.decode(manufacturerData.getString("dataMaskBase64"));
+                                    } catch (IllegalArgumentException exception) {
+                                        throw new IllegalArgumentException("Malformed scanFilter data mask base64!", exception);
+                                    }
+                                }
+                                if (data != null) {
+                                    if (dataMask != null) {
+                                        if (dataMask.length != data.length) {
+                                            throw new IllegalArgumentException("Scan data and data mask array sizes must be equal!");
+                                        }
+                                        builder.setManufacturerData(manufacturerId, data, dataMask);
+                                        filterHasAtLeastOneCondition = true;
+                                    } else {
+                                        builder.setManufacturerData(manufacturerId, data);
+                                        filterHasAtLeastOneCondition = true;
+                                    }
+                                }
+                            }
+
+                            if (filterHasAtLeastOneCondition) {
+                                filters.add(builder.build());
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        bleAdapter.startDeviceScan(
-                filteredUUIDs != null ? ReadableArrayConverter.toStringArray(filteredUUIDs) : null,
-                scanMode, callbackType,
-                new OnEventCallback<ScanResult>() {
-                    @Override
-                    public void onEvent(ScanResult data) {
-                        sendEvent(Event.ScanEvent, scanResultConverter.toJSCallback(data));
-                    }
-                }, new OnErrorCallback() {
-                    @Override
-                    public void onError(BleError error) {
-                        sendEvent(Event.ScanEvent, errorConverter.toJSCallback(error));
-                    }
-                });
+        final OnEventCallback<ScanResult> onEventCallback = new OnEventCallback<ScanResult>() {
+            @Override
+            public void onEvent(ScanResult data) {
+                sendEvent(Event.ScanEvent, scanResultConverter.toJSCallback(data));
+            }
+        };
+
+        final OnErrorCallback onErrorCallback = new OnErrorCallback() {
+            @Override
+            public void onError(BleError error) {
+                sendEvent(Event.ScanEvent, errorConverter.toJSCallback(error));
+            }
+        };
+
+
+        if (filters.isEmpty()) {
+            bleAdapter.startDeviceScan(
+                    filteredUUIDs != null ? ReadableArrayConverter.toStringArray(filteredUUIDs) : null,
+                    scanMode, callbackType,
+                    onEventCallback,
+                    onErrorCallback);
+        } else {
+            ScanFilter[] scanFilters = filters.toArray(new ScanFilter[0]);
+            bleAdapter.startDeviceScan(
+                    scanFilters,
+                    scanMode, callbackType,
+                    onEventCallback,
+                    onErrorCallback);
+        }
     }
 
     @ReactMethod
